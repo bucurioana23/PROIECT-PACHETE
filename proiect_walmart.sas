@@ -4,8 +4,7 @@
 ==================================================================== */
 
 /* 1. CREAREA UNUI SET DE DATE SAS DIN FIȘIERE EXTERNE (PROC IMPORT) */
-/* Schimbă calea către locația exactă a fișierului tău dacă este nevoie */
-PROC IMPORT DATAFILE="c:\Users\rebec\OneDrive\Desktop\PACHETE SOFTWARE\proiect\Walmart_Sales.csv"
+PROC IMPORT DATAFILE="/home/u64485715/proiect_psw/Walmart_Sales.csv"
     OUT=WORK.walmart_brut
     DBMS=CSV
     REPLACE;
@@ -101,3 +100,102 @@ PROC SGPLOT DATA=WORK.walmart_procesat;
 RUN;
 
 TITLE; /* Curățăm titlurile la final */
+
+
+/* 8. COMBINAREA SETURILOR DE DATE PRIN MERGE (DATA STEP) */
+/* Creăm două seturi separate: statistici vânzări și indicatori economici */
+PROC SQL;
+    CREATE TABLE WORK.stats_vanzari AS
+    SELECT Store,
+           SUM(Weekly_Sales)  AS Total_Vanzari  FORMAT=DOLLAR20.2,
+           AVG(Weekly_Sales)  AS Media_Vanzari  FORMAT=DOLLAR20.2,
+           MAX(Weekly_Sales)  AS Max_Vanzari    FORMAT=DOLLAR20.2
+    FROM WORK.walmart_procesat
+    GROUP BY Store;
+
+    CREATE TABLE WORK.stats_economici AS
+    SELECT Store,
+           AVG(Unemployment) AS Somaj_Mediu   FORMAT=8.2,
+           AVG(Fuel_Price)   AS Benzina_Medie FORMAT=8.2,
+           AVG(CPI)          AS CPI_Mediu     FORMAT=8.2
+    FROM WORK.walmart_procesat
+    GROUP BY Store;
+QUIT;
+
+/* Sortăm ambele seturi după Store înainte de MERGE */
+PROC SORT DATA=WORK.stats_vanzari;    BY Store; RUN;
+PROC SORT DATA=WORK.stats_economici;  BY Store; RUN;
+
+/* MERGE prin DATA step — combină cele două seturi pe baza cheii Store */
+DATA WORK.walmart_complet;
+    MERGE WORK.stats_vanzari   (IN=a)
+          WORK.stats_economici (IN=b);
+    BY Store;
+    IF a AND b; /* Păstrăm doar înregistrările prezente în ambele seturi */
+RUN;
+
+TITLE "Raport Complet: Vânzări + Indicatori Economici per Magazin";
+PROC PRINT DATA=WORK.walmart_complet NOOBS;
+    VAR Store Total_Vanzari Media_Vanzari Max_Vanzari Somaj_Mediu Benzina_Medie CPI_Mediu;
+RUN;
+TITLE;
+
+/* 9. STATISTICI AVANSATE (PROC UNIVARIATE & PROC CORR) */
+TITLE "Statistici avansate pentru Vânzările Săptămânale";
+PROC UNIVARIATE DATA=WORK.walmart_procesat NORMAL PLOT;
+    VAR Weekly_Sales;
+    HISTOGRAM Weekly_Sales / NORMAL;
+    INSET MEAN STD SKEWNESS KURTOSIS / POSITION=NE;
+RUN;
+TITLE;
+
+TITLE "Matricea de Corelație — Factori care influențează Vânzările";
+PROC CORR DATA=WORK.walmart_procesat PLOTS=MATRIX(HISTOGRAM);
+    VAR Weekly_Sales Temperature Fuel_Price CPI Unemployment;
+RUN;
+TITLE;
+
+/* 10. SAS ML — REGRESIE LINIARĂ (PROC REG) */
+/* Modelăm impactul factorilor externi asupra vânzărilor săptămânale */
+TITLE "SAS ML: Regresie Liniară — Factori care determină Vânzările";
+PROC REG DATA=WORK.walmart_procesat PLOTS(MAXPOINTS=NONE)=DIAGNOSTICS;
+    MODEL Weekly_Sales = Temperature Fuel_Price CPI Unemployment Holiday_Flag
+          / STB COVB VIF;
+    /* STB = coeficienți standardizați, VIF = verificare multicoliniaritate */
+RUN;
+QUIT;
+TITLE;
+
+/* 11. SAS ML — REGRESIE LOGISTICĂ (PROC LOGISTIC) */
+/* Prezicere: va fi o săptămână cu vânzări MARI (1) sau MICI (0)? */
+DATA WORK.walmart_ml;
+    SET WORK.walmart_procesat;
+    Media_Globala = 1200000; /* Pragul aproximativ pentru vânzări mari */
+    IF Weekly_Sales > Media_Globala THEN Performanta_Flag = 1;
+    ELSE Performanta_Flag = 0;
+RUN;
+
+TITLE "SAS ML: Regresie Logistică — Prezicerea Performanței Magazinului";
+PROC LOGISTIC DATA=WORK.walmart_ml DESCENDING PLOTS(ONLY)=ROC;
+    MODEL Performanta_Flag = Temperature Fuel_Price CPI Unemployment Holiday_Flag
+          / SELECTION=STEPWISE SLENTRY=0.05 SLSTAY=0.05 LACKFIT RSQUARE;
+RUN;
+TITLE;
+
+/* 12. SAS ML — CLUSTERING (PROC FASTCLUS — K-Means în SAS) */
+/* Segmentarea magazinelor în 3 grupuri după vânzări și șomaj */
+TITLE "SAS ML: Clusterizare K-Means (PROC FASTCLUS) — Segmentarea Magazinelor";
+PROC FASTCLUS DATA=WORK.walmart_complet OUT=WORK.clustere MAXCLUSTERS=3 MAXITER=100;
+    VAR Media_Vanzari Somaj_Mediu;
+RUN;
+TITLE;
+
+TITLE "Raport Clustere — ce magazin a fost asignat în ce grup";
+PROC REPORT DATA=WORK.clustere NOWD;
+    COLUMNS Store Media_Vanzari Somaj_Mediu CLUSTER;
+    DEFINE Store        / DISPLAY "Magazin";
+    DEFINE Media_Vanzari / DISPLAY "Media Vânzări ($)" FORMAT=DOLLAR12.0;
+    DEFINE Somaj_Mediu  / DISPLAY "Șomaj Mediu (%)";
+    DEFINE CLUSTER      / DISPLAY "Cluster (Grup)";
+RUN;
+TITLE;
