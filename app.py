@@ -4,177 +4,178 @@ import numpy as np
 import plotly.express as px
 
 # ---------------------------------------------------------
-# Setare pagina Streamlit (trebuie sa fie prima comanda)
+# Setare pagina Streamlit
 # ---------------------------------------------------------
-st.set_page_config(page_title="Analiza Vânzări Walmart", layout="wide")
+st.set_page_config(page_title="Analiza Vânzări Walmart", layout="wide", page_icon="🛒")
 
 # ---------------------------------------------------------
-# Interfață
+# Încărcarea și Curățarea Datelor (Global)
 # ---------------------------------------------------------
-st.title("🛒 Analiza Vânzărilor - Walmart")
-st.markdown("""
-Acest dashboard analizează vânzările magazinelor Walmart și factorii care le influențează 
-(temperatura, prețul combustibilului, rata șomajului, sărbătorile).
-""")
-
-# ---------------------------------------------------------
-# Încărcarea datelor
-# ---------------------------------------------------------
-# Folosim @st.cache_data ca să nu încarce fișierul de fiecare dată când dăm click pe ceva
 @st.cache_data
-def load_data():
-    # Citim fișierul CSV
+def load_and_clean_data():
     df = pd.read_csv("Walmart_Sales.csv")
-    
-    # Transformăm coloana Date în format recunoscut de timp (din formatul Zi-Lună-An)
     df['Date'] = pd.to_datetime(df['Date'], format='%d-%m-%Y') 
+    
+    # Tratarea valorilor lipsă
+    df = df.fillna(method='ffill')
+    
+    # Tratarea valorilor extreme
+    df = df[df['Weekly_Sales'] >= 0]
+    
+    # Extragere an și lună pentru analize viitoare
+    df['Year'] = df['Date'].dt.year
+    df['Month'] = df['Date'].dt.month
     
     return df
 
-df = load_data()
-
-st.header("1. Vizualizarea Setului de Date Brut")
-st.write(f"Setul de date conține **{df.shape[0]} rânduri** și **{df.shape[1]} coloane**.")
-st.dataframe(df.head(10)) # Afișăm primele 10 rânduri
+df = load_and_clean_data()
 
 # ---------------------------------------------------------
-# Curățarea Datelor (Bifăm cerința: tratarea valorilor lipsă)
+# MENIU LATERAL (SIDEBAR) PENTRU NAVIGARE MULTI-PAGINĂ
 # ---------------------------------------------------------
-st.header("2. Curățarea datelor")
+st.sidebar.title("📌 Meniu Navigare")
+st.sidebar.markdown("Folosește acest meniu pentru a naviga prin secțiunile proiectului.")
 
-# Verificăm dacă sunt valori lipsă
-missing_values = df.isnull().sum().sum()
-if missing_values == 0:
-    st.success("Datele sunt curate, nu există valori lipsă! (Perfect pentru analiză)")
-else:
-    st.warning(f"S-au găsit {missing_values} valori lipsă. Le vom trata.")
-    df = df.fillna(method='ffill')
-
-# Bifează cerința: tratarea valorilor extreme (outliers). Vom tăia vânzările negative (dacă există)
-nr_negative = (df['Weekly_Sales'] < 0).sum()
-if nr_negative > 0:
-    df = df[df['Weekly_Sales'] >= 0]
-    st.info(f"Am eliminat {nr_negative} valori extreme (vânzări negative).")
+page = st.sidebar.radio(
+    "Alege o pagină:",
+    ("1. Introducere și Date", "2. Analiza Vânzărilor", "3. Inteligență Artificială")
+)
 
 # ---------------------------------------------------------
-# Gruparea Datelor (Bifăm cerința: prelucrări statistice, grupare pandas)
+# PAGINA 1: INTRODUCERE ȘI DATE
 # ---------------------------------------------------------
-st.header("3. Evoluția vânzărilor în timp")
-
-# Extragem Anul și Luna din dată pentru a putea face grupări
-df['Year'] = df['Date'].dt.year
-df['Month'] = df['Date'].dt.month
-
-# Grupăm datele după dată și calculăm suma vânzărilor
-df_grouped_date = df.groupby('Date')['Weekly_Sales'].sum().reset_index()
-
-st.write("Grafic: Suma vânzărilor pe parcursul celor 3 ani (pentru toate magazinele).")
-st.line_chart(data=df_grouped_date, x='Date', y='Weekly_Sales')
-
-st.write("### Top 10 magazine cu cele mai mari vânzări medii")
-df_top_stores = df.groupby('Store')['Weekly_Sales'].mean().reset_index()
-df_top_stores = df_top_stores.sort_values(by='Weekly_Sales', ascending=False).head(10)
-df_top_stores['Store'] = df_top_stores['Store'].astype(str) # Transformăm în text pentru a afișa corect pe axa X
-
-fig_bar = px.bar(df_top_stores, x='Store', y='Weekly_Sales', color='Weekly_Sales', 
-                 text_auto='.2s', title='Top Magazine Walmart',
-                 color_continuous_scale='Sunsetdark')
-st.plotly_chart(fig_bar, use_container_width=True)
-
-st.write("### Cum se leagă factorii externi de Vânzări? (Matrice de Corelație)")
-st.markdown("Acest **Heatmap (Hartă termică)** calculează corelația matematică între variabile. Ne arată cu ce factor ar trebui să fim mai atenți.")
-cols = ['Weekly_Sales', 'Temperature', 'Fuel_Price', 'CPI', 'Unemployment']
-corr = df[cols].corr()
-
-fig_corr = px.imshow(corr, text_auto=True, aspect="auto", 
-                     color_continuous_scale='RdBu_r')
-st.plotly_chart(fig_corr, use_container_width=True)
-
-# ---------------------------------------------------------
-# 4. Machine Learning - Scalare & Clusterizare (scikit-learn)
-# ---------------------------------------------------------
-st.header("4. Segmentarea Magazinelor (Clusterizare K-Means)")
-st.markdown("Grupăm magazinele folosind algoritmul K-Means în funcție de **Vânzări** și **Rata Șomajului**.")
-
-try:
-    from sklearn.preprocessing import StandardScaler
-    from sklearn.cluster import KMeans
-
-    # Pregătim datele pentru clusterizare (agregam pe magazin)
-    df_clustering = df.groupby('Store').agg({'Weekly_Sales': 'mean', 'Unemployment': 'mean'}).reset_index()
-
-    # Scalarea datelor (Bifăm cerința: metode de scalare)
-    scaler = StandardScaler()
-    scaled_features = scaler.fit_transform(df_clustering[['Weekly_Sales', 'Unemployment']])
-
-    # K-Means
-    kmeans = KMeans(n_clusters=3, random_state=42)
-    df_clustering['Cluster'] = kmeans.fit_predict(scaled_features)
-    df_clustering['Cluster'] = df_clustering['Cluster'].astype(str) # Pentru o afișare mai frumoasă a culorilor
-
-    # Grafic interactiv cu Plotly
-    fig = px.scatter(df_clustering, x='Unemployment', y='Weekly_Sales', color='Cluster', 
-                     hover_data=['Store'], title="Clustere: Magazine vs Șomaj")
-    st.plotly_chart(fig)
-except ImportError:
-    st.error("Pachetele scikit-learn sau plotly nu sunt instalate. Deschide terminalul și rulează: pip install scikit-learn plotly")
-
-# ---------------------------------------------------------
-# 5. Regresie Logistică (scikit-learn)
-# ---------------------------------------------------------
-st.header("5. Regresie Logistică (Prezicerea performanței)")
-st.markdown("Vom prezice dacă un magazin va avea o săptămână **Peste Medie (1)** sau **Sub Medie (0)**.")
-
-try:
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.model_selection import train_test_split
-    from sklearn.metrics import accuracy_score
-
-    # Creăm variabila țintă (target) binară
-    media_vanzarilor = df['Weekly_Sales'].mean()
-    df['Performanta_Buna'] = (df['Weekly_Sales'] > media_vanzarilor).astype(int)
-
-    # Alegem variabilele independente
-    X_log = df[['Temperature', 'Fuel_Price', 'CPI', 'Unemployment', 'Holiday_Flag']]
-    y_log = df['Performanta_Buna']
-
-    # Împărțim datele în antrenare și testare
-    X_train, X_test, y_train, y_test = train_test_split(X_log, y_log, test_size=0.2, random_state=42)
-
-    # Antrenăm modelul
-    log_reg = LogisticRegression()
-    log_reg.fit(X_train, y_train)
-
-    # Acuratețe
-    y_pred = log_reg.predict(X_test)
-    acuratete = accuracy_score(y_test, y_pred)
+if page == "1. Introducere și Date":
+    st.title("🛒 Analiza Vânzărilor - Walmart")
+    st.markdown("""
+    Bine ai venit! Acest dashboard analizează vânzările magazinelor Walmart și modul în care diverși factori 
+    economici (temperatura, prețul combustibilului, rata șomajului, sărbătorile) le influențează.
+    """)
     
-    st.success(f"Acuratețea modelului de Regresie Logistică este: **{acuratete * 100:.2f}%**")
-except ImportError:
-    st.error("Pachetul scikit-learn nu este instalat.")
+    st.header("1. Pregătirea Setului de Date")
+    st.write(f"În urma încărcării, setul de date are **{df.shape[0]} rânduri** și **{df.shape[1]} coloane**.")
+    st.success("Datele au fost curățate automat (s-au tratat valorile lipsă și s-au eliminat vânzările negative).")
+
+    # WIDGET: CHECKBOX
+    st.markdown("---")
+    st.write("Apasă pe bifa de mai jos pentru a vizualiza tabelul brut:")
+    if st.checkbox("🔍 Arată Setul de Date Brut"):
+        st.dataframe(df.head(100)) # Afișăm primele 100 de rânduri pentru performanță
+        st.info("💡 Sfat: Poți da scroll în tabel pentru a vedea datele detaliate.")
 
 # ---------------------------------------------------------
-# 6. Regresie Multiplă (statsmodels)
+# PAGINA 2: ANALIZA VÂNZĂRILOR
 # ---------------------------------------------------------
-st.header("6. Ce influențează vânzările? (Regresie Multiplă)")
-st.markdown("Folosim `statsmodels` pentru a vedea cum influențează factorii externi vânzările.")
+elif page == "2. Analiza Vânzărilor":
+    st.title("📈 Analiza Vânzărilor (EDA)")
+    
+    # WIDGET: SELECTBOX
+    st.header("1. Evoluția vânzărilor în timp")
+    
+    # Creăm o listă cu toate magazinele, adăugând și opțiunea "Toate Magazinele"
+    lista_magazine = ["Toate Magazinele"] + list(df['Store'].unique())
+    magazin_ales = st.selectbox("Alege magazinul pentru a-i vedea evoluția:", lista_magazine)
+    
+    # Filtrăm datele în funcție de ce a ales utilizatorul din Drop-Down
+    if magazin_ales == "Toate Magazinele":
+        df_plot = df.groupby('Date')['Weekly_Sales'].sum().reset_index()
+        st.write("Afișăm **suma vânzărilor** pentru întreaga rețea Walmart.")
+    else:
+        df_plot = df[df['Store'] == magazin_ales].groupby('Date')['Weekly_Sales'].sum().reset_index()
+        st.write(f"Afișăm vânzările **doar pentru Magazinul {magazin_ales}**.")
+        
+    st.line_chart(data=df_plot, x='Date', y='Weekly_Sales')
 
-try:
-    import statsmodels.api as sm
+    st.markdown("---")
+    st.header("2. Top 10 Magazine cu cele mai mari vânzări medii")
+    
+    df_top_stores = df.groupby('Store')['Weekly_Sales'].mean().reset_index()
+    df_top_stores = df_top_stores.sort_values(by='Weekly_Sales', ascending=False).head(10)
+    df_top_stores['Store'] = df_top_stores['Store'].astype(str) # Transformăm în text pt axa X
 
-    # Alegem variabilele independente (X) și dependenta (Y)
-    X_multi = df[['Temperature', 'Fuel_Price', 'CPI', 'Unemployment', 'Holiday_Flag']]
-    Y_multi = df['Weekly_Sales']
+    fig_bar = px.bar(df_top_stores, x='Store', y='Weekly_Sales', color='Weekly_Sales', 
+                     text_auto='.2s', title='Top Magazine Walmart',
+                     color_continuous_scale='sunsetdark')
+    st.plotly_chart(fig_bar, use_container_width=True)
 
-    # Adăugăm constanta
-    X_multi_sm = sm.add_constant(X_multi)
+# ---------------------------------------------------------
+# PAGINA 3: INTELIGENȚĂ ARTIFICIALĂ
+# ---------------------------------------------------------
+elif page == "3. Inteligență Artificială":
+    st.title("🤖 Inteligență Artificială și Econometrie")
+    
+    st.write("### Cum se leagă factorii externi de Vânzări? (Matrice de Corelație)")
+    st.markdown("Acest **Heatmap** calculează corelația matematică între variabile. Ne arată cu ce factor ar trebui să fim mai atenți.")
+    cols = ['Weekly_Sales', 'Temperature', 'Fuel_Price', 'CPI', 'Unemployment']
+    corr = df[cols].corr()
 
-    # Antrenăm modelul
-    model = sm.OLS(Y_multi, X_multi_sm).fit()
+    fig_corr = px.imshow(corr, text_auto=True, aspect="auto", color_continuous_scale='RdBu_r')
+    st.plotly_chart(fig_corr, use_container_width=True)
+    
+    st.markdown("---")
+    st.header("1. Segmentarea Magazinelor (Clusterizare K-Means)")
+    
+    # WIDGET: SLIDER
+    numar_clustere = st.slider("Alege numărul de clustere (grupuri) în care să împărțim magazinele:", min_value=2, max_value=5, value=3)
+    
+    try:
+        from sklearn.preprocessing import StandardScaler
+        from sklearn.cluster import KMeans
 
-    # Afișăm rezultatul
-    st.text(model.summary())
+        df_clustering = df.groupby('Store').agg({'Weekly_Sales': 'mean', 'Unemployment': 'mean'}).reset_index()
 
-    st.info("💡 **Interpretare economică:** Ne uităm la valoarea `P>|t|`. Dacă este sub 0.05, factorul respectiv influențează semnificativ vânzările. De asemenea, coeficientul (coef) arată direcția: dacă e negativ la Șomaj (Unemployment), înseamnă că vânzările scad când șomajul crește.")
-except ImportError:
-    st.error("Pachetul statsmodels nu este instalat. Deschide terminalul și rulează: pip install statsmodels")
+        scaler = StandardScaler()
+        scaled_features = scaler.fit_transform(df_clustering[['Weekly_Sales', 'Unemployment']])
+
+        kmeans = KMeans(n_clusters=numar_clustere, random_state=42)
+        df_clustering['Cluster'] = kmeans.fit_predict(scaled_features)
+        df_clustering['Cluster'] = df_clustering['Cluster'].astype(str)
+
+        fig = px.scatter(df_clustering, x='Unemployment', y='Weekly_Sales', color='Cluster', 
+                         hover_data=['Store'], title=f"Gruparea în {numar_clustere} Clustere: Magazine vs Șomaj")
+        st.plotly_chart(fig, use_container_width=True)
+    except ImportError:
+        st.error("Pachetul scikit-learn nu este instalat.")
+
+    st.markdown("---")
+    st.header("2. Regresie Logistică (Prezicerea performanței)")
+    st.markdown("Vom prezice dacă un magazin va avea o săptămână **Peste Medie (1)** sau **Sub Medie (0)**.")
+
+    try:
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.model_selection import train_test_split
+        from sklearn.metrics import accuracy_score
+
+        media_vanzarilor = df['Weekly_Sales'].mean()
+        df['Performanta_Buna'] = (df['Weekly_Sales'] > media_vanzarilor).astype(int)
+
+        X_log = df[['Temperature', 'Fuel_Price', 'CPI', 'Unemployment', 'Holiday_Flag']]
+        y_log = df['Performanta_Buna']
+
+        X_train, X_test, y_train, y_test = train_test_split(X_log, y_log, test_size=0.2, random_state=42)
+
+        log_reg = LogisticRegression()
+        log_reg.fit(X_train, y_train)
+
+        y_pred = log_reg.predict(X_test)
+        acuratete = accuracy_score(y_test, y_pred)
+        
+        st.success(f"Acuratețea modelului de Regresie Logistică este: **{acuratete * 100:.2f}%**")
+    except ImportError:
+        st.error("Pachetul scikit-learn nu este instalat.")
+
+    st.markdown("---")
+    st.header("3. Ce influențează vânzările? (Regresie Multiplă)")
+    st.markdown("Folosim `statsmodels` pentru a vedea cum influențează factorii externi vânzările.")
+
+    try:
+        import statsmodels.api as sm
+
+        X_multi = df[['Temperature', 'Fuel_Price', 'CPI', 'Unemployment', 'Holiday_Flag']]
+        Y_multi = df['Weekly_Sales']
+
+        X_multi_sm = sm.add_constant(X_multi)
+        model = sm.OLS(Y_multi, X_multi_sm).fit()
+
+        st.text(model.summary())
+    except ImportError:
+        st.error("Pachetul statsmodels nu este instalat.")
